@@ -1,0 +1,91 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: doctor_registry
+      POSTGRES_USER: doctorregistry
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-doctorregistry-password}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U doctorregistry -d doctor_registry"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+
+  rabbitmq:
+    image: rabbitmq:4-management-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: doctorregistry
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-strong-password}
+      RABBITMQ_DEFAULT_VHOST: /
+    ports:
+      - "${RABBITMQ_PORT:-5672}:5672"
+      - "${RABBITMQ_MANAGEMENT_PORT:-15672}:15672"
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  api:
+    build:
+      context: .
+      dockerfile: src/DoctorRegistry.Api/Dockerfile
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ASPNETCORE_URLS: http://+:8080
+      ConnectionStrings__DoctorRegistry: Host=postgres;Port=5432;Database=doctor_registry;Username=doctorregistry;Password=${POSTGRES_PASSWORD:-doctorregistry-password}
+      RabbitMq__Host: rabbitmq
+      RabbitMq__Port: 5672
+      RabbitMq__UserName: doctorregistry
+      RabbitMq__Password: ${RABBITMQ_PASSWORD:-strong-password}
+      RabbitMq__VirtualHost: /
+      RabbitMq__PrefetchCount: 10
+      RabbitMq__RetryPublishConfirmTimeoutSeconds: 10
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8080"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      dockerfile: src/DoctorRegistry.Worker/Dockerfile
+    environment:
+      ConnectionStrings__DoctorRegistry: Host=postgres;Port=5432;Database=doctor_registry;Username=doctorregistry;Password=${POSTGRES_PASSWORD:-doctorregistry-password}
+      RabbitMq__Host: rabbitmq
+      RabbitMq__Port: 5672
+      RabbitMq__UserName: doctorregistry
+      RabbitMq__Password: ${RABBITMQ_PASSWORD:-strong-password}
+      RabbitMq__VirtualHost: /
+      RabbitMq__PrefetchCount: 10
+      RabbitMq__RetryPublishConfirmTimeoutSeconds: 10
+    depends_on:
+      api:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  rabbitmq-data:
